@@ -3,69 +3,81 @@ import zipfile
 import pandas as pd
 import streamlit as st
 from pathlib import Path
+import shutil
 
 st.set_page_config(page_title="Elvira Image Assigner", layout="wide")
 
 # =====================================================
-# LOGIN PROFESSIONALE CON LOGO
+# LOGIN DARK PROFESSIONALE
 # =====================================================
 
-
 def require_password():
-    # CSS minimale (niente HTML card)
+
+    if st.session_state.get("auth_ok"):
+        return True
+
     st.markdown(
         """
         <style>
-          #MainMenu {visibility: hidden;}
-          footer {visibility: hidden;}
-          header {visibility: hidden;}
+        .block-container {padding-top: 0rem;}
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+
+        .login-wrapper {
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-box {
+            background-color: #111827;
+            padding: 40px;
+            border-radius: 16px;
+            width: 420px;
+            box-shadow: 0px 20px 60px rgba(0,0,0,0.4);
+            text-align: center;
+        }
+
+        .login-title {
+            font-size: 22px;
+            font-weight: 600;
+            margin-top: 15px;
+            color: white;
+        }
+
+        .login-sub {
+            font-size: 14px;
+            opacity: 0.6;
+            margin-bottom: 25px;
+            color: white;
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    if st.session_state.get("auth_ok"):
-        return True
+    st.markdown('<div class="login-wrapper"><div class="login-box">', unsafe_allow_html=True)
 
-    # Centra con columns (super stabile)
-    left, mid, right = st.columns([1, 2, 1], vertical_alignment="center")
+    try:
+        st.image("elvira_logo.png", width=160)
+    except:
+        pass
 
-    with mid:
-        st.markdown("<div style='height: 10vh'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="login-title">Elvira Image Assigner</div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-sub">Accesso riservato</div>', unsafe_allow_html=True)
 
-        # Logo (se manca, non rompe la pagina)
-        try:
-            st.image("elvira_logo.png", use_container_width=True)
-        except Exception:
-            st.markdown("")
+    pwd = st.text_input("Password", type="password", label_visibility="collapsed")
 
-        st.markdown(
-            "<h2 style='text-align:center; margin-top:10px;'>Elvira Image Assigner</h2>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            "<p style='text-align:center; opacity:0.7; margin-top:-8px;'>Accesso riservato</p>",
-            unsafe_allow_html=True,
-        )
-
-        pwd = st.text_input("Password", type="password", placeholder="Inserisci password")
-
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            login = st.button("Accedi", use_container_width=True)
-        with c2:
-            clear = st.button("Pulisci", use_container_width=True)
-
-        if clear:
-            st.session_state.pop("pwd_tmp", None)
+    if st.button("Accedi", use_container_width=True):
+        if pwd == st.secrets.get("APP_PASSWORD", ""):
+            st.session_state["auth_ok"] = True
             st.rerun()
+        else:
+            st.error("Password errata")
 
-        if login:
-            if pwd == st.secrets.get("APP_PASSWORD", ""):
-                st.session_state["auth_ok"] = True
-                st.rerun()
-            else:
-                st.error("Password errata")
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
     return False
 
@@ -77,13 +89,65 @@ if not require_password():
 # APP PRINCIPALE
 # =====================================================
 
-st.title("Gestione immagini prodotti (Titolo + Colore)")
+st.title("Gestione immagini prodotti")
 
-# Logout
+# Cartella immagini
+out_dir = Path("output_images")
+out_dir.mkdir(exist_ok=True)
+
+# Sidebar controlli
 with st.sidebar:
+
+    st.subheader("Gestione sessione")
+
     if st.button("🚪 Logout"):
         st.session_state["auth_ok"] = False
         st.rerun()
+
+    st.divider()
+
+    st.subheader("Download immagini")
+
+    files = list(out_dir.glob("*"))
+    if files:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for p in files:
+                z.write(p, arcname=p.name)
+        buf.seek(0)
+
+        st.download_button(
+            "⬇️ Scarica ZIP",
+            buf,
+            "output_images.zip",
+            "application/zip",
+        )
+    else:
+        st.info("Nessuna immagine salvata")
+
+    st.divider()
+
+    st.subheader("Pulizia")
+
+    if st.button("🗑️ Svuota output_images"):
+        st.session_state["confirm_delete"] = True
+
+    if st.session_state.get("confirm_delete"):
+        st.warning("Sei sicuro di voler eliminare TUTTE le immagini?")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("✅ Conferma eliminazione"):
+                shutil.rmtree(out_dir)
+                out_dir.mkdir(exist_ok=True)
+                st.session_state["confirm_delete"] = False
+                st.success("Cartella svuotata")
+                st.rerun()
+
+        with col2:
+            if st.button("❌ Annulla"):
+                st.session_state["confirm_delete"] = False
+                st.rerun()
 
 # =====================================================
 # FUNZIONI
@@ -108,26 +172,10 @@ def sort_image_col(col: str) -> int:
     return 999
 
 # =====================================================
-# UPLOAD CSV
+# CSV
 # =====================================================
 
 csv_file = st.file_uploader("Carica CSV prodotti", type=["csv"])
-out_dir = Path("output_images")
-out_dir.mkdir(exist_ok=True)
-
-# ZIP download sidebar
-with st.sidebar:
-    st.subheader("Download immagini")
-    files = list(out_dir.glob("*"))
-    if files:
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            for p in files:
-                z.write(p, arcname=p.name)
-        buf.seek(0)
-        st.download_button("⬇️ Scarica ZIP", buf, "output_images.zip", "application/zip")
-    else:
-        st.info("Nessuna immagine salvata")
 
 if not csv_file:
     st.info("Carica un CSV per iniziare")
@@ -218,4 +266,4 @@ for color in colors:
             else:
                 st.info("Non ancora assegnata")
 
-st.success("App pronta ✅")
+st.success("Sistema pronto ✅")
