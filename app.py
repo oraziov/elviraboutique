@@ -8,7 +8,7 @@ import shutil
 st.set_page_config(page_title="Elvira Image Assigner", layout="wide")
 
 # =====================================================
-# LOGIN 
+# LOGIN
 # =====================================================
 
 def require_password():
@@ -170,7 +170,6 @@ if not csv_file:
 
 df = pd.read_csv(csv_file)
 
-# Prendo tutte le colonne Image* (Image1, Image2, ...)
 image_cols = [c for c in df.columns if c.lower().startswith("image")]
 if not image_cols:
     st.error("Nessuna colonna Image trovata")
@@ -182,7 +181,6 @@ if "Title" not in df.columns:
 
 color_col = "Colore" if "Colore" in df.columns else None
 
-# Costruisco righe uniche: Title + Colore + ImageX + basename
 rows = []
 seen = set()
 
@@ -221,10 +219,9 @@ if all_df.empty:
 all_df["order"] = all_df["image_col"].apply(sort_image_col)
 all_df = all_df.sort_values(["Title", "Colore", "order", "basename"]).drop(columns=["order"])
 
-# Stato file presenti
 existing_files = existing_files_map()
 
-# Navigazione: prossimo prodotto incompleto + filtro colori incompleti
+# Navigazione
 nav_col1, nav_col2 = st.columns([2, 1])
 
 with nav_col1:
@@ -250,16 +247,69 @@ selected_title = st.selectbox(
 )
 
 st.session_state["selected_title"] = selected_title
-
 prod_df = all_df[all_df["Title"] == selected_title].copy()
+
+# =====================================================
+# HEADER PRODOTTO (EVIDENTE)
+# =====================================================
+
+st.markdown(
+    """
+    <style>
+    .product-header {
+        padding: 18px 20px;
+        border-radius: 14px;
+        background: #0f172a;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        margin: 10px 0 18px 0;
+    }
+    .product-title {
+        font-size: 30px;
+        font-weight: 800;
+        color: white;
+        margin: 0;
+        line-height: 1.2;
+    }
+    .product-sub {
+        margin-top: 8px;
+        color: rgba(226, 232, 240, 0.85);
+        font-size: 14px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+color_count = len(prod_df["Colore"].fillna("").unique())
+total_images = len(prod_df)
+done_images = sum(is_assigned(b, existing_files) for b in prod_df["basename"].tolist())
+missing_images = total_images - done_images
+pct = (done_images / total_images) if total_images else 0
+
+st.markdown(
+    f"""
+    <div class="product-header">
+        <div class="product-title">{selected_title}</div>
+        <div class="product-sub">
+            Colori: <b>{color_count}</b> &nbsp;•&nbsp;
+            Immagini: <b>{done_images}</b> / <b>{total_images}</b> &nbsp;•&nbsp;
+            Mancanti: <b>{missing_images}</b>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+if total_images > 0:
+    st.progress(pct)
+
+st.divider()
 
 # Colori del titolo
 colors = sorted(prod_df["Colore"].fillna("").unique(), key=lambda x: (x == "", x))
 
-# UI per colore
 for color in colors:
     label = color if color else "SENZA COLORE"
-
     sub = prod_df[prod_df["Colore"].fillna("") == (color or "")].copy()
 
     assigned_flags = [is_assigned(b, existing_files) for b in sub["basename"].tolist()]
@@ -269,7 +319,6 @@ for color in colors:
     if show_only_incomplete_colors and missing_count == 0:
         continue
 
-    # Header colore + badge stato
     h1, h2 = st.columns([3, 2])
     with h1:
         st.header(f"Colore: {label}")
@@ -282,12 +331,10 @@ for color in colors:
     if total_count > 0:
         st.progress((total_count - missing_count) / total_count)
 
-    # Righe immagini
     for _, r in sub.iterrows():
         basename = r["basename"]
         image_col = r["image_col"]
 
-        # ✅ richiesta: "Image1 Nero"
         st.subheader(f"{image_col} {label} • {basename}")
 
         c1, c2 = st.columns([1, 1])
