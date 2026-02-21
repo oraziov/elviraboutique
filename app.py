@@ -8,7 +8,7 @@ import shutil
 st.set_page_config(page_title="Elvira Image Assigner", layout="wide")
 
 # =====================================================
-# LOGIN
+# LOGIN (ROBUSTO)
 # =====================================================
 
 def require_password():
@@ -72,6 +72,12 @@ if not require_password():
 out_dir = Path("output_images")
 out_dir.mkdir(exist_ok=True)
 
+def safe_str(x) -> str:
+    if pd.isna(x):
+        return ""
+    s = str(x).strip()
+    return "" if s.lower() == "nan" else s
+
 def url_to_basename(x: str) -> str:
     if pd.isna(x):
         return ""
@@ -86,7 +92,7 @@ def sort_image_col(col: str) -> int:
     if c.startswith("image"):
         try:
             return int(c.replace("image", ""))
-        except:
+        except Exception:
             return 999
     return 999
 
@@ -97,28 +103,21 @@ def is_assigned(basename: str, existing_files: dict) -> bool:
     p = existing_files.get(basename)
     return bool(p and p.exists())
 
-def first_incomplete_title(all_df: pd.DataFrame, existing_files: dict):
-    for t in sorted(all_df["Title"].unique()):
-        sub = all_df[all_df["Title"] == t]
+def first_incomplete_title(df_titles: pd.DataFrame, existing_files: dict):
+    for t in sorted(df_titles["Title"].unique()):
+        sub = df_titles[df_titles["Title"] == t]
         if any(not is_assigned(b, existing_files) for b in sub["basename"].tolist()):
             return t
     return None
 
-def safe_str(x) -> str:
-    if pd.isna(x):
-        return ""
-    s = str(x).strip()
-    return "" if s.lower() == "nan" else s
-
 def read_image_bytes(path: Path) -> bytes:
-    # Evita cache del browser: passiamo bytes a st.image()
     try:
         return path.read_bytes()
     except Exception:
         return b""
 
 # =====================================================
-# SIDEBAR (statico: sessione/zip/pulizia)
+# SIDEBAR (sessione + zip + pulizia)
 # =====================================================
 
 with st.sidebar:
@@ -130,22 +129,21 @@ with st.sidebar:
     st.divider()
 
     st.subheader("Download immagini")
-    files = list(out_dir.glob("*"))
-    if any(p.is_file() for p in files):
+    files = [p for p in out_dir.glob("*") if p.is_file()]
+    if files:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for p in files:
-                if p.is_file():
-                    z.write(p, arcname=p.name)
+                z.write(p, arcname=p.name)
         buf.seek(0)
         st.download_button(
             "⬇️ Scarica ZIP",
             buf,
             "output_images.zip",
             "application/zip",
-            use_container_width=True
+            use_container_width=True,
         )
-        st.caption(f"File nello ZIP: {len([p for p in files if p.is_file()])}")
+        st.caption(f"File nello ZIP: {len(files)}")
     else:
         st.info("Nessuna immagine salvata")
 
@@ -183,22 +181,24 @@ if not csv_file:
 
 df = pd.read_csv(csv_file)
 
-# Colonne immagini
+# colonne base
+if "Title" not in df.columns:
+    st.error("Colonna Title mancante")
+    st.stop()
+
+# immagini
 image_cols = [c for c in df.columns if c.lower().startswith("image")]
 if not image_cols:
     st.error("Nessuna colonna Image trovata")
     st.stop()
 
-if "Title" not in df.columns:
-    st.error("Colonna Title mancante")
-    st.stop()
-
-# Colori / brand / stagione
+# colonne opzionali (se presenti)
 color_col = "Colore" if "Colore" in df.columns else None
 brand_col = "Brand" if "Brand" in df.columns else None
-season_col = "Stagione" if "Stagione" in df.columns else ("Season" if "Season" in df.columns else None)
+season_col = "Stagione" if "Stagione" in df.columns else None   # confermato
+type_col = "Type" if "Type" in df.columns else None
 
-# Costruisco righe uniche: Title + Colore + ImageX + basename (+ Brand + Stagione)
+# costruzione dataset immagini (uniche)
 rows = []
 seen = set()
 
@@ -210,6 +210,7 @@ for _, row in df.iterrows():
     color = safe_str(row.get(color_col, "")) if color_col else ""
     brand = safe_str(row.get(brand_col, "")) if brand_col else ""
     season = safe_str(row.get(season_col, "")) if season_col else ""
+    ptype = safe_str(row.get(type_col, "")) if type_col else ""
 
     for col in image_cols:
         raw = row.get(col, "")
@@ -217,7 +218,7 @@ for _, row in df.iterrows():
         if not basename:
             continue
 
-        key = (title, color, brand, season, col, basename)
+        key = (title, color, brand, season, ptype, col, basename)
         if key in seen:
             continue
         seen.add(key)
@@ -227,6 +228,7 @@ for _, row in df.iterrows():
             "Colore": color,
             "Brand": brand,
             "Stagione": season,
+            "Type": ptype,
             "image_col": col,
             "basename": basename
         })
@@ -236,37 +238,46 @@ if all_df.empty:
     st.warning("Non ho trovato nessun nome immagine nelle colonne Image*.")
     st.stop()
 
+# ordine
 all_df["order"] = all_df["image_col"].apply(sort_image_col)
-all_df = all_df.sort_values(["Brand", "Title", "Colore", "Stagione", "order", "basename"]).drop(columns=["order"])
+all_df = all_df.sort_values(["Brand", "Stagione", "Title", "Colore", "Type", "order", "basename"]).drop(columns=["order"])
 
-# Stato file presenti
 existing_files = existing_files_map()
 
 # =====================================================
-# FILTRI (Brand / Stagione / Ricerca titolo)
+# FILTRI
 # =====================================================
 
-filter_row1, filter_row2 = st.columns([2, 1])
+st.subheader("Filtri")
 
-with filter_row1:
-    title_query = st.text_input("🔎 Cerca nel Titolo (contiene)", value="")
+top1, top2, top3 = st.columns([2, 1, 1])
+with top1:
+    title_query = st.text_input("🔎 Cerca nel Titolo", value="")
+with top2:
+    show_only_incomplete_titles = st.checkbox("Solo prodotti incompleti", value=False)
+with top3:
+    show_only_missing_images = st.checkbox("Solo immagini mancanti (dentro prodotto)", value=False)
 
-with filter_row2:
-    show_only_incomplete_colors = st.checkbox("Mostra solo colori incompleti", value=True)
+# valori unici per filtri
+brands = sorted([b for b in all_df["Brand"].dropna().unique().tolist() if str(b).strip()])
+seasons = sorted([s for s in all_df["Stagione"].dropna().unique().tolist() if str(s).strip()])
+types = sorted([t for t in all_df["Type"].dropna().unique().tolist() if str(t).strip()])
+colors = sorted([c for c in all_df["Colore"].dropna().unique().tolist() if str(c).strip()])
 
-# Sidebar filtri “catalogo”
-with st.sidebar:
-    st.divider()
-    st.subheader("Filtri prodotti")
-
-    brands = sorted([b for b in all_df["Brand"].dropna().unique().tolist() if str(b).strip() != ""])
-    seasons = sorted([s for s in all_df["Stagione"].dropna().unique().tolist() if str(s).strip() != ""])
-
+f1, f2, f3, f4 = st.columns([1, 1, 1, 1])
+with f1:
     selected_brands = st.multiselect("Brand", brands, default=[])
+with f2:
     selected_seasons = st.multiselect("Stagione", seasons, default=[])
+with f3:
+    selected_types = st.multiselect("Type / Categoria", types, default=[])
+with f4:
+    selected_colors = st.multiselect("Colore", colors, default=[])
 
-    st.divider()
-    st.subheader("Navigazione")
+nav1, nav2 = st.columns([2, 1])
+with nav1:
+    show_only_incomplete_colors = st.checkbox("Mostra solo colori incompleti", value=True)
+with nav2:
     if st.button("➡️ Prossimo prodotto incompleto", use_container_width=True):
         nxt = first_incomplete_title(all_df, existing_files)
         if nxt:
@@ -275,25 +286,36 @@ with st.sidebar:
         else:
             st.success("Tutti i prodotti sono completi ✅")
 
-# Applica filtri
+# applica filtri
 filtered_df = all_df.copy()
 
 if selected_brands:
     filtered_df = filtered_df[filtered_df["Brand"].isin(selected_brands)]
-
 if selected_seasons:
     filtered_df = filtered_df[filtered_df["Stagione"].isin(selected_seasons)]
+if selected_types:
+    filtered_df = filtered_df[filtered_df["Type"].isin(selected_types)]
+if selected_colors:
+    filtered_df = filtered_df[filtered_df["Colore"].isin(selected_colors)]
 
 if title_query.strip():
     q = title_query.strip().lower()
     filtered_df = filtered_df[filtered_df["Title"].str.lower().str.contains(q, na=False)]
+
+if show_only_incomplete_titles:
+    keep_titles = []
+    for t in sorted(filtered_df["Title"].unique()):
+        sub = filtered_df[filtered_df["Title"] == t]
+        if any(not is_assigned(b, existing_files) for b in sub["basename"].tolist()):
+            keep_titles.append(t)
+    filtered_df = filtered_df[filtered_df["Title"].isin(keep_titles)]
 
 titles = sorted(filtered_df["Title"].unique().tolist())
 if not titles:
     st.warning("Nessun prodotto corrisponde ai filtri.")
     st.stop()
 
-# Select titolo (persistente)
+# select titolo persistente
 if "selected_title" not in st.session_state or st.session_state["selected_title"] not in titles:
     st.session_state["selected_title"] = titles[0]
 
@@ -347,11 +369,13 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-brand_vals = sorted([b for b in prod_df["Brand"].dropna().unique().tolist() if str(b).strip() != ""])
-season_vals = sorted([s for s in prod_df["Stagione"].dropna().unique().tolist() if str(s).strip() != ""])
+brand_vals = sorted([b for b in prod_df["Brand"].dropna().unique().tolist() if str(b).strip()])
+season_vals = sorted([s for s in prod_df["Stagione"].dropna().unique().tolist() if str(s).strip()])
+type_vals = sorted([t for t in prod_df["Type"].dropna().unique().tolist() if str(t).strip()])
 
 brand_txt = ", ".join(brand_vals) if brand_vals else "—"
 season_txt = ", ".join(season_vals) if season_vals else "—"
+type_txt = ", ".join(type_vals) if type_vals else "—"
 
 color_count = len(prod_df["Colore"].fillna("").unique())
 total_images = len(prod_df)
@@ -366,6 +390,7 @@ st.markdown(
         <div class="product-sub">
             <span class="pill">Brand: <b>{brand_txt}</b></span>
             <span class="pill">Stagione: <b>{season_txt}</b></span>
+            <span class="pill">Type: <b>{type_txt}</b></span>
         </div>
         <div class="product-sub" style="margin-top:10px;">
             Colori: <b>{color_count}</b> &nbsp;•&nbsp;
@@ -383,12 +408,12 @@ if total_images > 0:
 st.divider()
 
 # =====================================================
-# UI per colore (solo anteprime caricate)
+# UI PER COLORE (solo anteprime caricate)
 # =====================================================
 
-colors = sorted(prod_df["Colore"].fillna("").unique(), key=lambda x: (x == "", x))
+colors_prod = sorted(prod_df["Colore"].fillna("").unique(), key=lambda x: (x == "", x))
 
-for color in colors:
+for color in colors_prod:
     label = color if color else "SENZA COLORE"
     sub = prod_df[prod_df["Colore"].fillna("") == (color or "")].copy()
 
@@ -415,6 +440,10 @@ for color in colors:
         basename = r["basename"]
         image_col = r["image_col"]
 
+        # opzionale: mostra solo quelle mancanti
+        if show_only_missing_images and is_assigned(basename, existing_files):
+            continue
+
         st.subheader(f"{image_col} {label} • {basename}")
 
         c1, c2 = st.columns([1, 1])
@@ -427,11 +456,8 @@ for color in colors:
             )
             if up:
                 (out_dir / basename).write_bytes(up.getbuffer())
-                # aggiorno mappa subito (senza aspettare)
                 existing_files[basename] = out_dir / basename
                 st.success("Salvato ✅")
-                # Niente rerun obbligatorio: la preview usa bytes e si aggiorna già
-                # (ma se vuoi aggiornare progress e stato colore immediatamente, puoi riattivarlo)
                 st.rerun()
 
         with c2:
