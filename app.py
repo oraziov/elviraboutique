@@ -252,4 +252,4 @@ for color in colors:
             else:
                 st.info("Non ancora assegnata")
 
-st.success("Sistema pronto ✅")
+st.success("Sistema pronto")
