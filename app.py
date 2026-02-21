@@ -8,76 +8,61 @@ import shutil
 st.set_page_config(page_title="Elvira Image Assigner", layout="wide")
 
 # =====================================================
-# LOGIN DARK PROFESSIONALE
+# LOGIN (ROBUSTO, CENTRATO, STREAMLIT-NATIVE)
 # =====================================================
 
 def require_password():
-
+    # Se già loggato
     if st.session_state.get("auth_ok"):
         return True
 
+    # CSS minimale (niente wrapper full-screen che rompe)
     st.markdown(
         """
         <style>
-        .block-container {padding-top: 0rem;}
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-        header {visibility: hidden;}
-
-        .login-wrapper {
-            height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .login-box {
-            background-color: #111827;
-            padding: 40px;
-            border-radius: 16px;
-            width: 420px;
-            box-shadow: 0px 20px 60px rgba(0,0,0,0.4);
-            text-align: center;
-        }
-
-        .login-title {
-            font-size: 22px;
-            font-weight: 600;
-            margin-top: 15px;
-            color: white;
-        }
-
-        .login-sub {
-            font-size: 14px;
-            opacity: 0.6;
-            margin-bottom: 25px;
-            color: white;
-        }
+          #MainMenu {visibility: hidden;}
+          footer {visibility: hidden;}
+          header {visibility: hidden;}
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="login-wrapper"><div class="login-box">', unsafe_allow_html=True)
+    # Layout centrato affidabile
+    left, center, right = st.columns([1, 1.2, 1])
 
-    try:
-        st.image("elvira_logo.png", width=160)
-    except:
-        pass
+    with center:
+        st.write("")
+        st.write("")
+        st.write("")
 
-    st.markdown('<div class="login-title">Elvira Image Assigner</div>', unsafe_allow_html=True)
-    st.markdown('<div class="login-sub">Accesso riservato</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            # Logo
+            try:
+                st.image("elvira_logo.png", use_container_width=True)
+            except Exception:
+                pass
 
-    pwd = st.text_input("Password", type="password", label_visibility="collapsed")
+            st.markdown("## Elvira Image Assigner")
+            st.caption("Accesso riservato")
 
-    if st.button("Accedi", use_container_width=True):
-        if pwd == st.secrets.get("APP_PASSWORD", ""):
-            st.session_state["auth_ok"] = True
-            st.rerun()
-        else:
-            st.error("Password errata")
+            pwd = st.text_input("Password", type="password", placeholder="Inserisci password")
 
-    st.markdown("</div></div>", unsafe_allow_html=True)
+            col1, col2 = st.columns(2)
+            with col1:
+                login = st.button("Accedi", use_container_width=True)
+            with col2:
+                clear = st.button("Pulisci", use_container_width=True)
+
+            if clear:
+                st.rerun()
+
+            if login:
+                if pwd == st.secrets.get("APP_PASSWORD", ""):
+                    st.session_state["auth_ok"] = True
+                    st.rerun()
+                else:
+                    st.error("Password errata")
 
     return False
 
@@ -100,7 +85,7 @@ with st.sidebar:
 
     st.subheader("Gestione sessione")
 
-    if st.button("🚪 Logout"):
+    if st.button("🚪 Logout", use_container_width=True):
         st.session_state["auth_ok"] = False
         st.rerun()
 
@@ -121,6 +106,7 @@ with st.sidebar:
             buf,
             "output_images.zip",
             "application/zip",
+            use_container_width=True
         )
     else:
         st.info("Nessuna immagine salvata")
@@ -129,7 +115,7 @@ with st.sidebar:
 
     st.subheader("Pulizia")
 
-    if st.button("🗑️ Svuota output_images"):
+    if st.button("🗑️ Svuota output_images", use_container_width=True):
         st.session_state["confirm_delete"] = True
 
     if st.session_state.get("confirm_delete"):
@@ -137,15 +123,15 @@ with st.sidebar:
         col1, col2 = st.columns(2)
 
         with col1:
-            if st.button("✅ Conferma eliminazione"):
-                shutil.rmtree(out_dir)
+            if st.button("✅ Conferma", use_container_width=True):
+                shutil.rmtree(out_dir, ignore_errors=True)
                 out_dir.mkdir(exist_ok=True)
                 st.session_state["confirm_delete"] = False
                 st.success("Cartella svuotata")
                 st.rerun()
 
         with col2:
-            if st.button("❌ Annulla"):
+            if st.button("❌ Annulla", use_container_width=True):
                 st.session_state["confirm_delete"] = False
                 st.rerun()
 
