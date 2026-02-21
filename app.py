@@ -104,8 +104,21 @@ def first_incomplete_title(all_df: pd.DataFrame, existing_files: dict):
             return t
     return None
 
+def safe_str(x) -> str:
+    if pd.isna(x):
+        return ""
+    s = str(x).strip()
+    return "" if s.lower() == "nan" else s
+
+def read_image_bytes(path: Path) -> bytes:
+    # Evita cache del browser: passiamo bytes a st.image()
+    try:
+        return path.read_bytes()
+    except Exception:
+        return b""
+
 # =====================================================
-# SIDEBAR
+# SIDEBAR (statico: sessione/zip/pulizia)
 # =====================================================
 
 with st.sidebar:
@@ -118,7 +131,7 @@ with st.sidebar:
 
     st.subheader("Download immagini")
     files = list(out_dir.glob("*"))
-    if files:
+    if any(p.is_file() for p in files):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for p in files:
@@ -170,6 +183,7 @@ if not csv_file:
 
 df = pd.read_csv(csv_file)
 
+# Colonne immagini
 image_cols = [c for c in df.columns if c.lower().startswith("image")]
 if not image_cols:
     st.error("Nessuna colonna Image trovata")
@@ -179,19 +193,23 @@ if "Title" not in df.columns:
     st.error("Colonna Title mancante")
     st.stop()
 
+# Colori / brand / stagione
 color_col = "Colore" if "Colore" in df.columns else None
+brand_col = "Brand" if "Brand" in df.columns else None
+season_col = "Stagione" if "Stagione" in df.columns else ("Season" if "Season" in df.columns else None)
 
+# Costruisco righe uniche: Title + Colore + ImageX + basename (+ Brand + Stagione)
 rows = []
 seen = set()
 
 for _, row in df.iterrows():
-    title = str(row["Title"]).strip()
-    if not title or title.lower() == "nan":
+    title = safe_str(row.get("Title", ""))
+    if not title:
         continue
 
-    color = str(row.get(color_col, "")).strip() if color_col else ""
-    if color.lower() == "nan":
-        color = ""
+    color = safe_str(row.get(color_col, "")) if color_col else ""
+    brand = safe_str(row.get(brand_col, "")) if brand_col else ""
+    season = safe_str(row.get(season_col, "")) if season_col else ""
 
     for col in image_cols:
         raw = row.get(col, "")
@@ -199,7 +217,7 @@ for _, row in df.iterrows():
         if not basename:
             continue
 
-        key = (title, color, col, basename)
+        key = (title, color, brand, season, col, basename)
         if key in seen:
             continue
         seen.add(key)
@@ -207,6 +225,8 @@ for _, row in df.iterrows():
         rows.append({
             "Title": title,
             "Colore": color,
+            "Brand": brand,
+            "Stagione": season,
             "image_col": col,
             "basename": basename
         })
@@ -217,17 +237,36 @@ if all_df.empty:
     st.stop()
 
 all_df["order"] = all_df["image_col"].apply(sort_image_col)
-all_df = all_df.sort_values(["Title", "Colore", "order", "basename"]).drop(columns=["order"])
+all_df = all_df.sort_values(["Brand", "Title", "Colore", "Stagione", "order", "basename"]).drop(columns=["order"])
 
+# Stato file presenti
 existing_files = existing_files_map()
 
-# Navigazione
-nav_col1, nav_col2 = st.columns([2, 1])
+# =====================================================
+# FILTRI (Brand / Stagione / Ricerca titolo)
+# =====================================================
 
-with nav_col1:
+filter_row1, filter_row2 = st.columns([2, 1])
+
+with filter_row1:
+    title_query = st.text_input("🔎 Cerca nel Titolo (contiene)", value="")
+
+with filter_row2:
     show_only_incomplete_colors = st.checkbox("Mostra solo colori incompleti", value=True)
 
-with nav_col2:
+# Sidebar filtri “catalogo”
+with st.sidebar:
+    st.divider()
+    st.subheader("Filtri prodotti")
+
+    brands = sorted([b for b in all_df["Brand"].dropna().unique().tolist() if str(b).strip() != ""])
+    seasons = sorted([s for s in all_df["Stagione"].dropna().unique().tolist() if str(s).strip() != ""])
+
+    selected_brands = st.multiselect("Brand", brands, default=[])
+    selected_seasons = st.multiselect("Stagione", seasons, default=[])
+
+    st.divider()
+    st.subheader("Navigazione")
     if st.button("➡️ Prossimo prodotto incompleto", use_container_width=True):
         nxt = first_incomplete_title(all_df, existing_files)
         if nxt:
@@ -236,21 +275,39 @@ with nav_col2:
         else:
             st.success("Tutti i prodotti sono completi ✅")
 
-titles = sorted(all_df["Title"].unique())
-if "selected_title" not in st.session_state:
+# Applica filtri
+filtered_df = all_df.copy()
+
+if selected_brands:
+    filtered_df = filtered_df[filtered_df["Brand"].isin(selected_brands)]
+
+if selected_seasons:
+    filtered_df = filtered_df[filtered_df["Stagione"].isin(selected_seasons)]
+
+if title_query.strip():
+    q = title_query.strip().lower()
+    filtered_df = filtered_df[filtered_df["Title"].str.lower().str.contains(q, na=False)]
+
+titles = sorted(filtered_df["Title"].unique().tolist())
+if not titles:
+    st.warning("Nessun prodotto corrisponde ai filtri.")
+    st.stop()
+
+# Select titolo (persistente)
+if "selected_title" not in st.session_state or st.session_state["selected_title"] not in titles:
     st.session_state["selected_title"] = titles[0]
 
 selected_title = st.selectbox(
     "Seleziona Titolo",
     titles,
-    index=(titles.index(st.session_state["selected_title"]) if st.session_state["selected_title"] in titles else 0),
+    index=titles.index(st.session_state["selected_title"]),
 )
-
 st.session_state["selected_title"] = selected_title
-prod_df = all_df[all_df["Title"] == selected_title].copy()
+
+prod_df = filtered_df[filtered_df["Title"] == selected_title].copy()
 
 # =====================================================
-# HEADER PRODOTTO (EVIDENTE)
+# HEADER PRODOTTO (EVIDENTE + Brand + Stagione)
 # =====================================================
 
 st.markdown(
@@ -275,10 +332,26 @@ st.markdown(
         color: rgba(226, 232, 240, 0.85);
         font-size: 14px;
     }
+    .pill {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(226, 232, 240, 0.25);
+        margin-right: 8px;
+        font-size: 12px;
+        color: rgba(226, 232, 240, 0.95);
+        background: rgba(255,255,255,0.06);
+    }
     </style>
     """,
     unsafe_allow_html=True
 )
+
+brand_vals = sorted([b for b in prod_df["Brand"].dropna().unique().tolist() if str(b).strip() != ""])
+season_vals = sorted([s for s in prod_df["Stagione"].dropna().unique().tolist() if str(s).strip() != ""])
+
+brand_txt = ", ".join(brand_vals) if brand_vals else "—"
+season_txt = ", ".join(season_vals) if season_vals else "—"
 
 color_count = len(prod_df["Colore"].fillna("").unique())
 total_images = len(prod_df)
@@ -291,6 +364,10 @@ st.markdown(
     <div class="product-header">
         <div class="product-title">{selected_title}</div>
         <div class="product-sub">
+            <span class="pill">Brand: <b>{brand_txt}</b></span>
+            <span class="pill">Stagione: <b>{season_txt}</b></span>
+        </div>
+        <div class="product-sub" style="margin-top:10px;">
             Colori: <b>{color_count}</b> &nbsp;•&nbsp;
             Immagini: <b>{done_images}</b> / <b>{total_images}</b> &nbsp;•&nbsp;
             Mancanti: <b>{missing_images}</b>
@@ -305,7 +382,10 @@ if total_images > 0:
 
 st.divider()
 
-# Colori del titolo
+# =====================================================
+# UI per colore (solo anteprime caricate)
+# =====================================================
+
 colors = sorted(prod_df["Colore"].fillna("").unique(), key=lambda x: (x == "", x))
 
 for color in colors:
@@ -347,16 +427,24 @@ for color in colors:
             )
             if up:
                 (out_dir / basename).write_bytes(up.getbuffer())
+                # aggiorno mappa subito (senza aspettare)
                 existing_files[basename] = out_dir / basename
                 st.success("Salvato ✅")
+                # Niente rerun obbligatorio: la preview usa bytes e si aggiorna già
+                # (ma se vuoi aggiornare progress e stato colore immediatamente, puoi riattivarlo)
                 st.rerun()
 
         with c2:
-            if is_assigned(basename, existing_files):
-                st.image(str(existing_files[basename]), use_container_width=True)
+            p = existing_files.get(basename)
+            if p and p.exists():
+                img_bytes = read_image_bytes(p)
+                if img_bytes:
+                    st.image(img_bytes, use_container_width=True)
+                else:
+                    st.warning("File salvato ma non leggibile (riprova).")
             else:
                 st.info("Non ancora assegnata")
 
         st.divider()
 
-st.success("Sistema pronto")
+st.success("Sistema pronto ✅")
