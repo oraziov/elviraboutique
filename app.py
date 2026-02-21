@@ -312,4 +312,4 @@ for color in colors:
 
         st.divider()
 
-st.success("Sistema pronto ✅")
+st.success("Sistema pronto")
