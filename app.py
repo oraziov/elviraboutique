@@ -10,48 +10,67 @@ st.set_page_config(page_title="Elvira Image Assigner", layout="wide")
 # LOGIN PROFESSIONALE CON LOGO
 # =====================================================
 
-def login_screen():
+
+def require_password():
+    # CSS minimale (niente HTML card)
     st.markdown(
         """
         <style>
-          .login-wrap { min-height: 95vh; display: flex; align-items: center; justify-content: center; }
-          .login-card { width: 420px; max-width: 92vw; padding: 30px; border-radius: 18px;
-                        border: 1px solid rgba(0,0,0,0.08); background: white;
-                        box-shadow: 0 15px 40px rgba(0,0,0,0.08); }
-          .login-title { text-align: center; font-size: 1.4rem; font-weight: 700; margin: 10px 0 4px; }
-          .login-sub { text-align: center; opacity: .6; margin-bottom: 20px; }
-          .login-footer { text-align: center; opacity: .5; font-size: .8rem; margin-top: 15px; }
           #MainMenu {visibility: hidden;}
           footer {visibility: hidden;}
+          header {visibility: hidden;}
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="login-wrap"><div class="login-card">', unsafe_allow_html=True)
+    if st.session_state.get("auth_ok"):
+        return True
 
-    # LOGO dalla repo (deve chiamarsi elvira_logo.png)
-    st.image("elvira_logo.png", width=150)
+    # Centra con columns (super stabile)
+    left, mid, right = st.columns([1, 2, 1], vertical_alignment="center")
 
-    st.markdown('<div class="login-title">Elvira Image Assigner</div>', unsafe_allow_html=True)
-    st.markdown('<div class="login-sub">Accesso riservato</div>', unsafe_allow_html=True)
+    with mid:
+        st.markdown("<div style='height: 10vh'></div>", unsafe_allow_html=True)
 
-    pwd = st.text_input("Password", type="password", key="login_pwd", label_visibility="collapsed", placeholder="Password")
-    btn = st.button("Accedi", use_container_width=True)
+        # Logo (se manca, non rompe la pagina)
+        try:
+            st.image("elvira_logo.png", use_container_width=True)
+        except Exception:
+            st.markdown("")
 
-    if btn:
-        if pwd == st.secrets.get("APP_PASSWORD", ""):
-            st.session_state["auth_ok"] = True
+        st.markdown(
+            "<h2 style='text-align:center; margin-top:10px;'>Elvira Image Assigner</h2>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<p style='text-align:center; opacity:0.7; margin-top:-8px;'>Accesso riservato</p>",
+            unsafe_allow_html=True,
+        )
+
+        pwd = st.text_input("Password", type="password", placeholder="Inserisci password")
+
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            login = st.button("Accedi", use_container_width=True)
+        with c2:
+            clear = st.button("Pulisci", use_container_width=True)
+
+        if clear:
+            st.session_state.pop("pwd_tmp", None)
             st.rerun()
-        else:
-            st.error("Password errata")
 
-    st.markdown('<div class="login-footer">© Elvira</div>', unsafe_allow_html=True)
-    st.markdown("</div></div>", unsafe_allow_html=True)
+        if login:
+            if pwd == st.secrets.get("APP_PASSWORD", ""):
+                st.session_state["auth_ok"] = True
+                st.rerun()
+            else:
+                st.error("Password errata")
+
+    return False
 
 
-if "auth_ok" not in st.session_state or not st.session_state["auth_ok"]:
-    login_screen()
+if not require_password():
     st.stop()
 
 # =====================================================
