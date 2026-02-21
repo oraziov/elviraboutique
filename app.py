@@ -8,7 +8,7 @@ import shutil
 st.set_page_config(page_title="Elvira Image Assigner", layout="wide")
 
 # =====================================================
-# LOGIN (ROBUSTO, CENTRATO, STREAMLIT-NATIVE)
+# LOGIN 
 # =====================================================
 
 def require_password():
