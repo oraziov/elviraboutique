@@ -116,6 +116,11 @@ def read_image_bytes(path: Path) -> bytes:
     except Exception:
         return b""
 
+def delete_image(basename: str):
+    p = out_dir / basename
+    if p.exists() and p.is_file():
+        p.unlink()
+
 # =====================================================
 # SIDEBAR (sessione + zip + pulizia)
 # =====================================================
@@ -151,21 +156,21 @@ with st.sidebar:
 
     st.subheader("Pulizia")
     if st.button("🗑️ Svuota output_images", use_container_width=True):
-        st.session_state["confirm_delete"] = True
+        st.session_state["confirm_delete_all"] = True
 
-    if st.session_state.get("confirm_delete"):
+    if st.session_state.get("confirm_delete_all"):
         st.warning("Confermi di eliminare TUTTE le immagini salvate?")
         c1, c2 = st.columns(2)
         with c1:
             if st.button("✅ Conferma", use_container_width=True):
                 shutil.rmtree(out_dir, ignore_errors=True)
                 out_dir.mkdir(exist_ok=True)
-                st.session_state["confirm_delete"] = False
+                st.session_state["confirm_delete_all"] = False
                 st.success("output_images svuotata")
                 st.rerun()
         with c2:
             if st.button("❌ Annulla", use_container_width=True):
-                st.session_state["confirm_delete"] = False
+                st.session_state["confirm_delete_all"] = False
                 st.rerun()
 
 # =====================================================
@@ -181,24 +186,20 @@ if not csv_file:
 
 df = pd.read_csv(csv_file)
 
-# colonne base
 if "Title" not in df.columns:
     st.error("Colonna Title mancante")
     st.stop()
 
-# immagini
 image_cols = [c for c in df.columns if c.lower().startswith("image")]
 if not image_cols:
     st.error("Nessuna colonna Image trovata")
     st.stop()
 
-# colonne opzionali (se presenti)
 color_col = "Colore" if "Colore" in df.columns else None
 brand_col = "Brand" if "Brand" in df.columns else None
-season_col = "Stagione" if "Stagione" in df.columns else None   # confermato
+season_col = "Stagione" if "Stagione" in df.columns else None  # confermato
 type_col = "Type" if "Type" in df.columns else None
 
-# costruzione dataset immagini (uniche)
 rows = []
 seen = set()
 
@@ -238,7 +239,6 @@ if all_df.empty:
     st.warning("Non ho trovato nessun nome immagine nelle colonne Image*.")
     st.stop()
 
-# ordine
 all_df["order"] = all_df["image_col"].apply(sort_image_col)
 all_df = all_df.sort_values(["Brand", "Stagione", "Title", "Colore", "Type", "order", "basename"]).drop(columns=["order"])
 
@@ -258,7 +258,6 @@ with top2:
 with top3:
     show_only_missing_images = st.checkbox("Solo immagini mancanti (dentro prodotto)", value=False)
 
-# valori unici per filtri
 brands = sorted([b for b in all_df["Brand"].dropna().unique().tolist() if str(b).strip()])
 seasons = sorted([s for s in all_df["Stagione"].dropna().unique().tolist() if str(s).strip()])
 types = sorted([t for t in all_df["Type"].dropna().unique().tolist() if str(t).strip()])
@@ -286,7 +285,6 @@ with nav2:
         else:
             st.success("Tutti i prodotti sono completi ✅")
 
-# applica filtri
 filtered_df = all_df.copy()
 
 if selected_brands:
@@ -315,7 +313,6 @@ if not titles:
     st.warning("Nessun prodotto corrisponde ai filtri.")
     st.stop()
 
-# select titolo persistente
 if "selected_title" not in st.session_state or st.session_state["selected_title"] not in titles:
     st.session_state["selected_title"] = titles[0]
 
@@ -329,7 +326,7 @@ st.session_state["selected_title"] = selected_title
 prod_df = filtered_df[filtered_df["Title"] == selected_title].copy()
 
 # =====================================================
-# HEADER PRODOTTO (EVIDENTE + Brand + Stagione)
+# HEADER PRODOTTO
 # =====================================================
 
 st.markdown(
@@ -408,7 +405,7 @@ if total_images > 0:
 st.divider()
 
 # =====================================================
-# UI PER COLORE (solo anteprime caricate)
+# UI PER COLORE + ELIMINA FOTO
 # =====================================================
 
 colors_prod = sorted(prod_df["Colore"].fillna("").unique(), key=lambda x: (x == "", x))
@@ -440,13 +437,12 @@ for color in colors_prod:
         basename = r["basename"]
         image_col = r["image_col"]
 
-        # opzionale: mostra solo quelle mancanti
         if show_only_missing_images and is_assigned(basename, existing_files):
             continue
 
         st.subheader(f"{image_col} {label} • {basename}")
 
-        c1, c2 = st.columns([1, 1])
+        c1, c2, c3 = st.columns([1, 1, 0.6])
 
         with c1:
             up = st.file_uploader(
@@ -470,6 +466,28 @@ for color in colors_prod:
                     st.warning("File salvato ma non leggibile (riprova).")
             else:
                 st.info("Non ancora assegnata")
+
+        # ✅ ELIMINA FOTO
+        with c3:
+            if is_assigned(basename, existing_files):
+                # conferma 2-step per evitare click accidentali
+                confirm_key = f"confirm_del_{basename}"
+                if st.session_state.get(confirm_key, False):
+                    if st.button("✅ Conferma", key=f"del2_{basename}", use_container_width=True):
+                        delete_image(basename)
+                        existing_files.pop(basename, None)
+                        st.session_state[confirm_key] = False
+                        st.success("Eliminata")
+                        st.rerun()
+                    if st.button("❌ Annulla", key=f"del_cancel_{basename}", use_container_width=True):
+                        st.session_state[confirm_key] = False
+                        st.rerun()
+                else:
+                    if st.button("🗑️ Elimina", key=f"del1_{basename}", use_container_width=True):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
+            else:
+                st.caption("")
 
         st.divider()
 
