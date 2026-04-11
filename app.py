@@ -52,9 +52,6 @@ def url_to_basename(x):
 def existing_files():
     return {p.name: p for p in out_dir.glob("*")}
 
-def is_assigned(name, files):
-    return name in files
-
 def read_img(p):
     try: return p.read_bytes()
     except: return None
@@ -108,7 +105,6 @@ for _, r in df.iterrows():
     color = safe(r.get("Colore"))
     code = safe(r.get("color_code"))
     brand = safe(r.get("Brand"))
-    season = safe(r.get("Stagione"))
     typ = safe(r.get("Type"))
 
     for col in image_cols:
@@ -124,39 +120,42 @@ for _, r in df.iterrows():
             "Colore": color,
             "ColorCode": code,
             "Brand": brand,
-            "Stagione": season,
             "Type": typ,
             "image_col": col,
             "basename": name
         })
 
 all_df = pd.DataFrame(rows)
-
 files = existing_files()
 
 # ================= FILTRI =================
 
 st.subheader("Filtri")
 
-search = st.text_input("Cerca titolo")
+search = st.text_input("🔎 Cerca titolo")
 
-brands = st.multiselect("Brand", sorted(all_df["Brand"].unique()))
-seasons = st.multiselect("Stagione", sorted(all_df["Stagione"].unique()))
-colors = st.multiselect("Colore", sorted(all_df["Colore"].unique()))
+brands = sorted(all_df["Brand"].dropna().unique())
+selected_brands = st.multiselect("Brand", brands)
+
+# 🔥 NUOVO filtro colore con codice
+all_df["ColoreLabel"] = all_df.apply(
+    lambda x: f"{x['Colore']} ({x['ColorCode']})" if x["ColorCode"] else x["Colore"],
+    axis=1
+)
+
+color_labels = sorted(all_df["ColoreLabel"].dropna().unique())
+selected_colors = st.multiselect("Colore", color_labels)
 
 filtered = all_df.copy()
 
 if search:
     filtered = filtered[filtered["Title"].str.contains(search, case=False)]
 
-if brands:
-    filtered = filtered[filtered["Brand"].isin(brands)]
+if selected_brands:
+    filtered = filtered[filtered["Brand"].isin(selected_brands)]
 
-if seasons:
-    filtered = filtered[filtered["Stagione"].isin(seasons)]
-
-if colors:
-    filtered = filtered[filtered["Colore"].isin(colors)]
+if selected_colors:
+    filtered = filtered[filtered["ColoreLabel"].isin(selected_colors)]
 
 titles = sorted(filtered["Title"].unique())
 selected = st.selectbox("Prodotto", titles)
@@ -165,14 +164,11 @@ prod = filtered[filtered["Title"] == selected]
 
 # ================= HEADER =================
 
-codes = prod["ColorCode"].unique()
-brand = ", ".join(prod["Brand"].unique())
-season = ", ".join(prod["Stagione"].unique())
+brand = ", ".join(prod["Brand"].dropna().unique())
 
 st.markdown(f"""
 ### {selected}
-Brand: {brand}  
-Stagione: {season}
+Brand: {brand}
 """)
 
 # ================= UI =================
