@@ -196,8 +196,9 @@ if not image_cols:
     st.stop()
 
 color_col = "Colore" if "Colore" in df.columns else None
+color_code_col = "color_code" if "color_code" in df.columns else None
 brand_col = "Brand" if "Brand" in df.columns else None
-season_col = "Stagione" if "Stagione" in df.columns else None  # confermato
+season_col = "Stagione" if "Stagione" in df.columns else None
 type_col = "Type" if "Type" in df.columns else None
 
 rows = []
@@ -209,6 +210,7 @@ for _, row in df.iterrows():
         continue
 
     color = safe_str(row.get(color_col, "")) if color_col else ""
+    color_code = safe_str(row.get(color_code_col, "")) if color_code_col else ""
     brand = safe_str(row.get(brand_col, "")) if brand_col else ""
     season = safe_str(row.get(season_col, "")) if season_col else ""
     ptype = safe_str(row.get(type_col, "")) if type_col else ""
@@ -219,7 +221,7 @@ for _, row in df.iterrows():
         if not basename:
             continue
 
-        key = (title, color, brand, season, ptype, col, basename)
+        key = (title, color, color_code, brand, season, ptype, col, basename)
         if key in seen:
             continue
         seen.add(key)
@@ -227,6 +229,7 @@ for _, row in df.iterrows():
         rows.append({
             "Title": title,
             "Colore": color,
+            "color_code": color_code,
             "Brand": brand,
             "Stagione": season,
             "Type": ptype,
@@ -240,7 +243,9 @@ if all_df.empty:
     st.stop()
 
 all_df["order"] = all_df["image_col"].apply(sort_image_col)
-all_df = all_df.sort_values(["Brand", "Stagione", "Title", "Colore", "Type", "order", "basename"]).drop(columns=["order"])
+all_df = all_df.sort_values(
+    ["Brand", "Stagione", "Title", "Colore", "color_code", "Type", "order", "basename"]
+).drop(columns=["order"])
 
 existing_files = existing_files_map()
 
@@ -261,7 +266,18 @@ with top3:
 brands = sorted([b for b in all_df["Brand"].dropna().unique().tolist() if str(b).strip()])
 seasons = sorted([s for s in all_df["Stagione"].dropna().unique().tolist() if str(s).strip()])
 types = sorted([t for t in all_df["Type"].dropna().unique().tolist() if str(t).strip()])
-colors = sorted([c for c in all_df["Colore"].dropna().unique().tolist() if str(c).strip()])
+
+color_map = (
+    all_df[["Colore", "color_code"]]
+    .drop_duplicates()
+    .fillna("")
+    .sort_values(["Colore", "color_code"])
+)
+
+color_options = [
+    f"{row['Colore']} ({row['color_code']})" if row["color_code"] else row["Colore"]
+    for _, row in color_map.iterrows()
+]
 
 f1, f2, f3, f4 = st.columns([1, 1, 1, 1])
 with f1:
@@ -271,7 +287,9 @@ with f2:
 with f3:
     selected_types = st.multiselect("Type / Categoria", types, default=[])
 with f4:
-    selected_colors = st.multiselect("Colore", colors, default=[])
+    selected_color_labels = st.multiselect("Colore", color_options, default=[])
+
+selected_colors = [c.rsplit(" (", 1)[0] for c in selected_color_labels]
 
 nav1, nav2 = st.columns([2, 1])
 with nav1:
@@ -411,8 +429,8 @@ st.divider()
 colors_prod = sorted(prod_df["Colore"].fillna("").unique(), key=lambda x: (x == "", x))
 
 for color in colors_prod:
-    label = color if color else "SENZA COLORE"
     sub = prod_df[prod_df["Colore"].fillna("") == (color or "")].copy()
+    label = color if color else "SENZA COLORE"
 
     assigned_flags = [is_assigned(b, existing_files) for b in sub["basename"].tolist()]
     total_count = len(assigned_flags)
@@ -421,9 +439,15 @@ for color in colors_prod:
     if show_only_incomplete_colors and missing_count == 0:
         continue
 
+    header_code = ""
+    if "color_code" in sub.columns:
+        color_codes = sorted([c for c in sub["color_code"].dropna().unique().tolist() if str(c).strip()])
+        if color_codes:
+            header_code = f" ({', '.join(color_codes)})"
+
     h1, h2 = st.columns([3, 2])
     with h1:
-        st.header(f"Colore: {label}")
+        st.header(f"Colore: {label}{header_code}")
     with h2:
         if missing_count == 0:
             st.success("COMPLETO ✅")
@@ -436,11 +460,13 @@ for color in colors_prod:
     for _, r in sub.iterrows():
         basename = r["basename"]
         image_col = r["image_col"]
+        color_code = safe_str(r.get("color_code", ""))
 
         if show_only_missing_images and is_assigned(basename, existing_files):
             continue
 
-        st.subheader(f"{image_col} {label} • {basename}")
+        image_label = f"{label} ({color_code})" if color_code else label
+        st.subheader(f"{image_col} {image_label} • {basename}")
 
         c1, c2, c3 = st.columns([1, 1, 0.6])
 
@@ -448,7 +474,7 @@ for color in colors_prod:
             up = st.file_uploader(
                 f"Carica file per {basename}",
                 type=["jpg", "jpeg", "png", "webp"],
-                key=f"{selected_title}_{label}_{basename}",
+                key=f"{selected_title}_{label}_{color_code}_{basename}",
             )
             if up:
                 (out_dir / basename).write_bytes(up.getbuffer())
@@ -467,10 +493,8 @@ for color in colors_prod:
             else:
                 st.info("Non ancora assegnata")
 
-        # ✅ ELIMINA FOTO
         with c3:
             if is_assigned(basename, existing_files):
-                # conferma 2-step per evitare click accidentali
                 confirm_key = f"confirm_del_{basename}"
                 if st.session_state.get(confirm_key, False):
                     if st.button("✅ Conferma", key=f"del2_{basename}", use_container_width=True):
