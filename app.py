@@ -164,12 +164,11 @@ all_df = pd.DataFrame(rows)
 existing_files = existing_files_map()
 
 # =====================================================
-# FILTRI (MODIFICATO QUI)
+# FILTRI
 # =====================================================
 
 st.subheader("Filtri")
 
-# 👇 costruzione label colore + codice
 color_map = (
     all_df[["Colore","color_code"]]
     .drop_duplicates()
@@ -193,7 +192,6 @@ with c2:
 with c3:
     selected_color_labels = st.multiselect("Colore", color_options)
 
-# 👇 conversione indietro
 selected_colors = [c.split(" (")[0] for c in selected_color_labels]
 
 filtered_df = all_df.copy()
@@ -218,8 +216,13 @@ prod_df = filtered_df[filtered_df["Title"]==selected_title]
 for _,r in prod_df.iterrows():
 
     b = r["basename"]
+    color = r["Colore"]
+    code = r["color_code"]
 
-    st.subheader(f"{r['image_col']} {r['Colore']} • {b}")
+    # 👇 QUI AGGIUNTO IL CODICE COLORE
+    label = f"{color} ({code})" if code else color
+
+    st.subheader(f"{r['image_col']} {label} • {b}")
 
     c1,c2,c3 = st.columns([1,1,0.5])
 
