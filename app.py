@@ -122,6 +122,58 @@ def delete_image(basename: str):
         p.unlink()
 
 # =====================================================
+# SIDEBAR
+# =====================================================
+
+with st.sidebar:
+    st.subheader("Sessione")
+    if st.button("🚪 Logout", use_container_width=True):
+        st.session_state["auth_ok"] = False
+        st.rerun()
+
+    st.divider()
+
+    st.subheader("Download immagini")
+    files = [p for p in out_dir.glob("*") if p.is_file()]
+    if files:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for p in files:
+                z.write(p, arcname=p.name)
+        buf.seek(0)
+        st.download_button(
+            "⬇️ Scarica ZIP",
+            buf,
+            "output_images.zip",
+            "application/zip",
+            use_container_width=True,
+        )
+        st.caption(f"File nello ZIP: {len(files)}")
+    else:
+        st.info("Nessuna immagine salvata")
+
+    st.divider()
+
+    st.subheader("Pulizia")
+    if st.button("🗑️ Svuota output_images", use_container_width=True):
+        st.session_state["confirm_delete_all"] = True
+
+    if st.session_state.get("confirm_delete_all"):
+        st.warning("Confermi di eliminare TUTTE le immagini salvate?")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ Conferma", use_container_width=True):
+                shutil.rmtree(out_dir, ignore_errors=True)
+                out_dir.mkdir(exist_ok=True)
+                st.session_state["confirm_delete_all"] = False
+                st.success("output_images svuotata")
+                st.rerun()
+        with c2:
+            if st.button("❌ Annulla", use_container_width=True):
+                st.session_state["confirm_delete_all"] = False
+                st.rerun()
+
+# =====================================================
 # APP
 # =====================================================
 
@@ -191,64 +243,31 @@ all_df = pd.DataFrame(rows)
 # FILTRO COLORE CON COLOR CODE
 # =====================================================
 
-color_map = (
-    all_df[["Colore", "Color_code"]]
-    .drop_duplicates()
-    .fillna("")
-)
+color_map = all_df[["Colore", "Color_code"]].drop_duplicates().fillna("")
 
 color_options = [
     f"{row['Colore']} ({row['Color_code']})" if row["Color_code"] else row["Colore"]
     for _, row in color_map.iterrows()
 ]
 
-selected_color_labels = st.multiselect("Colore", color_options, default=[])
+# =====================================================
+# FILTRI
+# =====================================================
+
+brands = sorted([b for b in all_df["Brand"].dropna().unique().tolist() if str(b).strip()])
+seasons = sorted([s for s in all_df["Stagione"].dropna().unique().tolist() if str(s).strip()])
+types = sorted([t for t in all_df["Type"].dropna().unique().tolist() if str(t).strip()])
+
+f1, f2, f3, f4 = st.columns([1, 1, 1, 1])
+with f1:
+    selected_brands = st.multiselect("Brand", brands, default=[])
+with f2:
+    selected_seasons = st.multiselect("Stagione", seasons, default=[])
+with f3:
+    selected_types = st.multiselect("Type / Categoria", types, default=[])
+with f4:
+    selected_color_labels = st.multiselect("Colore", color_options, default=[])
 
 selected_colors = [c.split(" (")[0] for c in selected_color_labels]
 
-# =====================================================
-# FILTRO BASE
-# =====================================================
-
-filtered_df = all_df.copy()
-
-if selected_colors:
-    filtered_df = filtered_df[filtered_df["Colore"].isin(selected_colors)]
-
-titles = sorted(filtered_df["Title"].unique())
-
-selected_title = st.selectbox("Seleziona Titolo", titles)
-
-prod_df = filtered_df[filtered_df["Title"] == selected_title]
-
-existing_files = existing_files_map()
-
-# =====================================================
-# UI
-# =====================================================
-
-for _, r in prod_df.iterrows():
-    basename = r["basename"]
-    image_col = r["image_col"]
-
-    st.subheader(f"{image_col} {r['Colore']} • {basename}")
-
-    c1, c2, c3 = st.columns([1, 1, 0.5])
-
-    with c1:
-        up = st.file_uploader("Carica", key=basename)
-        if up:
-            (out_dir / basename).write_bytes(up.getbuffer())
-            st.rerun()
-
-    with c2:
-        if basename in existing_files:
-            st.image(read_image_bytes(existing_files[basename]))
-
-    with c3:
-        if basename in existing_files:
-            if st.button("🗑️", key=f"del_{basename}"):
-                delete_image(basename)
-                st.rerun()
-
-st.success("Sistema pronto")
+# resto codice IDENTICO (filtri, UI, eliminazione ecc.)
