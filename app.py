@@ -4,40 +4,55 @@ import pandas as pd
 import streamlit as st
 from pathlib import Path
 import shutil
-from PIL import Image
-import difflib
 
 st.set_page_config(page_title="Elvira Image Assigner", layout="wide")
 
 # =====================================================
-# LOGIN
+# LOGIN (ROBUSTO)
 # =====================================================
 
 def require_password():
     if st.session_state.get("auth_ok"):
         return True
 
-    st.markdown("""
+    st.markdown(
+        """
         <style>
           #MainMenu {visibility: hidden;}
           footer {visibility: hidden;}
           header {visibility: hidden;}
         </style>
-    """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True,
+    )
 
     left, center, right = st.columns([1, 1.2, 1])
 
     with center:
+        st.write("")
+        st.write("")
+        st.write("")
         with st.container(border=True):
             try:
                 st.image("elvira_logo.png", use_container_width=True)
-            except:
+            except Exception:
                 pass
 
             st.markdown("## Elvira Image Assigner")
-            pwd = st.text_input("Password", type="password")
+            st.caption("Accesso riservato")
 
-            if st.button("Accedi"):
+            pwd = st.text_input("Password", type="password", placeholder="Inserisci password")
+
+            c1, c2 = st.columns(2)
+            with c1:
+                login = st.button("Accedi", use_container_width=True)
+            with c2:
+                clear = st.button("Pulisci", use_container_width=True)
+
+            if clear:
+                st.rerun()
+
+            if login:
                 if pwd == st.secrets.get("APP_PASSWORD", ""):
                     st.session_state["auth_ok"] = True
                     st.rerun()
@@ -57,52 +72,53 @@ if not require_password():
 out_dir = Path("output_images")
 out_dir.mkdir(exist_ok=True)
 
-# =====================================================
-# IMAGE PROCESSING (SHOPIFY)
-# =====================================================
-
-def process_image(file_bytes, max_size=(2048, 2048), quality=85, max_kb=250):
-    img = Image.open(io.BytesIO(file_bytes))
-
-    if img.mode in ("RGBA", "P"):
-        img = img.convert("RGB")
-
-    img.thumbnail(max_size)
-
-    output = io.BytesIO()
-
-    while quality > 30:
-        output.seek(0)
-        img.save(output, format="JPEG", quality=quality, optimize=True)
-        if len(output.getvalue()) / 1024 <= max_kb:
-            break
-        quality -= 5
-
-    return output.getvalue()
-
-# =====================================================
-# HELPERS
-# =====================================================
-
-def safe_str(x):
+def safe_str(x) -> str:
     if pd.isna(x):
         return ""
-    return str(x).strip()
+    s = str(x).strip()
+    return "" if s.lower() == "nan" else s
 
-def url_to_basename(x):
+def url_to_basename(x: str) -> str:
     if pd.isna(x):
         return ""
-    return str(x).split("?")[0].rsplit("/", 1)[-1]
+    s = str(x).strip()
+    if not s or s.lower() == "nan":
+        return ""
+    s = s.split("?")[0]
+    return s.rsplit("/", 1)[-1]
 
-def existing_files_map():
-    return {p.name: p for p in out_dir.glob("*")}
+def sort_image_col(col: str) -> int:
+    c = (col or "").lower().strip()
+    if c.startswith("image"):
+        try:
+            return int(c.replace("image", ""))
+        except Exception:
+            return 999
+    return 999
 
-def is_assigned(basename, existing):
-    return basename in existing
+def existing_files_map() -> dict:
+    return {p.name: p for p in out_dir.glob("*") if p.is_file()}
 
-def delete_image(basename):
+def is_assigned(basename: str, existing_files: dict) -> bool:
+    p = existing_files.get(basename)
+    return bool(p and p.exists())
+
+def first_incomplete_title(df_titles: pd.DataFrame, existing_files: dict):
+    for t in sorted(df_titles["Title"].unique()):
+        sub = df_titles[df_titles["Title"] == t]
+        if any(not is_assigned(b, existing_files) for b in sub["basename"].tolist()):
+            return t
+    return None
+
+def read_image_bytes(path: Path) -> bytes:
+    try:
+        return path.read_bytes()
+    except Exception:
+        return b""
+
+def delete_image(basename: str):
     p = out_dir / basename
-    if p.exists():
+    if p.exists() and p.is_file():
         p.unlink()
 
 # =====================================================
@@ -110,174 +126,169 @@ def delete_image(basename):
 # =====================================================
 
 with st.sidebar:
-
-    if st.button("🚪 Logout"):
+    st.subheader("Sessione")
+    if st.button("🚪 Logout", use_container_width=True):
         st.session_state["auth_ok"] = False
         st.rerun()
 
     st.divider()
 
-    # DOWNLOAD ZIP
-    files = list(out_dir.glob("*"))
+    st.subheader("Download immagini")
+    files = [p for p in out_dir.glob("*") if p.is_file()]
     if files:
         buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as z:
-            for f in files:
-                z.write(f, f.name)
-
-        st.download_button("⬇️ Scarica ZIP", buf.getvalue(), "images.zip")
-
-    st.divider()
-
-    # IMPORT MULTI / ZIP
-    st.subheader("📦 Import immagini")
-
-    uploaded_files = st.file_uploader(
-        "Trascina immagini o ZIP",
-        type=["jpg", "jpeg", "png", "webp", "zip"],
-        accept_multiple_files=True
-    )
-
-    if uploaded_files and "all_df" in globals():
-
-        names = all_df["basename"].tolist()
-        matched, skipped = 0, 0
-        unmatched = []
-
-        inputs = []
-
-        for f in uploaded_files:
-            if f.name.endswith(".zip"):
-                with zipfile.ZipFile(f) as z:
-                    for name in z.namelist():
-                        if not name.endswith("/"):
-                            inputs.append((Path(name).name, z.read(name)))
-            else:
-                inputs.append((f.name, f.getbuffer()))
-
-        progress = st.progress(0)
-
-        for i, (filename, file_bytes) in enumerate(inputs):
-            progress.progress((i+1)/len(inputs))
-
-            basename = Path(filename).name
-            target = out_dir / basename
-
-            if target.exists():
-                skipped += 1
-                continue
-
-            processed = process_image(file_bytes)
-
-            if basename in names:
-                target.write_bytes(processed)
-                matched += 1
-            else:
-                match = difflib.get_close_matches(basename, names, 1, 0.8)
-                if match:
-                    (out_dir / match[0]).write_bytes(processed)
-                    matched += 1
-                else:
-                    unmatched.append(basename)
-
-        st.success(f"✅ Match: {matched}")
-        st.info(f"⏭️ Skipped: {skipped}")
-
-        if unmatched:
-            st.warning(f"❌ Non associati: {len(unmatched)}")
-
-        st.rerun()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for p in files:
+                z.write(p, arcname=p.name)
+        buf.seek(0)
+        st.download_button(
+            "⬇️ Scarica ZIP",
+            buf,
+            "output_images.zip",
+            "application/zip",
+            use_container_width=True,
+        )
+        st.caption(f"File nello ZIP: {len(files)}")
+    else:
+        st.info("Nessuna immagine salvata")
 
     st.divider()
 
-    if st.button("🗑️ Svuota immagini"):
-        shutil.rmtree(out_dir, ignore_errors=True)
-        out_dir.mkdir(exist_ok=True)
-        st.rerun()
+    st.subheader("Pulizia")
+    if st.button("🗑️ Svuota output_images", use_container_width=True):
+        st.session_state["confirm_delete_all"] = True
+
+    if st.session_state.get("confirm_delete_all"):
+        st.warning("Confermi di eliminare TUTTE le immagini salvate?")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ Conferma", use_container_width=True):
+                shutil.rmtree(out_dir, ignore_errors=True)
+                out_dir.mkdir(exist_ok=True)
+                st.session_state["confirm_delete_all"] = False
+                st.success("output_images svuotata")
+                st.rerun()
+        with c2:
+            if st.button("❌ Annulla", use_container_width=True):
+                st.session_state["confirm_delete_all"] = False
+                st.rerun()
 
 # =====================================================
-# MAIN
+# APP
 # =====================================================
 
 st.title("Gestione immagini prodotti")
 
-csv_file = st.file_uploader("Carica CSV", type=["csv"])
+csv_file = st.file_uploader("Carica CSV prodotti", type=["csv"])
 if not csv_file:
+    st.info("Carica un CSV per iniziare")
     st.stop()
 
 df = pd.read_csv(csv_file)
 
+if "Title" not in df.columns:
+    st.error("Colonna Title mancante")
+    st.stop()
+
 image_cols = [c for c in df.columns if c.lower().startswith("image")]
+if not image_cols:
+    st.error("Nessuna colonna Image trovata")
+    st.stop()
+
+color_col = "Colore" if "Colore" in df.columns else None
+brand_col = "Brand" if "Brand" in df.columns else None
+season_col = "Stagione" if "Stagione" in df.columns else None
+type_col = "Type" if "Type" in df.columns else None
+color_code_col = "color_code" if "color_code" in df.columns else None
 
 rows = []
+seen = set()
 
 for _, row in df.iterrows():
+    title = safe_str(row.get("Title", ""))
+    if not title:
+        continue
+
+    color = safe_str(row.get(color_col, "")) if color_col else ""
+    brand = safe_str(row.get(brand_col, "")) if brand_col else ""
+    season = safe_str(row.get(season_col, "")) if season_col else ""
+    ptype = safe_str(row.get(type_col, "")) if type_col else ""
+    color_code = safe_str(row.get(color_code_col, "")) if color_code_col else ""
+
     for col in image_cols:
-        basename = url_to_basename(row[col])
-        if basename:
-            rows.append({
-                "Title": safe_str(row["Title"]),
-                "Colore": safe_str(row.get("Colore")),
-                "ColorCode": safe_str(row.get("color_code")),
-                "basename": basename
-            })
+        raw = row.get(col, "")
+        basename = url_to_basename(raw)
+        if not basename:
+            continue
+
+        key = (title, color, brand, season, ptype, col, basename)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        rows.append({
+            "Title": title,
+            "Colore": color,
+            "ColorCode": color_code,
+            "Brand": brand,
+            "Stagione": season,
+            "Type": ptype,
+            "image_col": col,
+            "basename": basename
+        })
 
 all_df = pd.DataFrame(rows)
 
-existing = existing_files_map()
+all_df["order"] = all_df["image_col"].apply(sort_image_col)
+all_df = all_df.sort_values(["Brand", "Stagione", "Title", "Colore", "Type", "order", "basename"]).drop(columns=["order"])
 
-titles = sorted(all_df["Title"].unique())
-selected_title = st.selectbox("Prodotto", titles)
-
-prod = all_df[all_df["Title"] == selected_title]
+existing_files = existing_files_map()
 
 # =====================================================
 # UI
 # =====================================================
 
-for color in prod["Colore"].unique():
+titles = sorted(all_df["Title"].unique())
+selected_title = st.selectbox("Seleziona Titolo", titles)
 
-    sub = prod[prod["Colore"] == color]
+prod_df = all_df[all_df["Title"] == selected_title]
 
-    code = sub["ColorCode"].iloc[0]
+for color in prod_df["Colore"].unique():
+    label = color if color else "SENZA COLORE"
+    sub = prod_df[prod_df["Colore"] == color]
 
-    color_dot = f"""
-    <span style="
-        background:{code};
-        width:16px;height:16px;
-        display:inline-block;
-        border-radius:50%;
-        margin-left:8px"></span>
-    """ if code else ""
+    color_code_val = sub["ColorCode"].iloc[0] if "ColorCode" in sub.columns else ""
 
-    st.markdown(f"## {color} {color_dot}", unsafe_allow_html=True)
+    color_dot = ""
+    if color_code_val:
+        color_dot = f"""
+        <span style="
+            display:inline-block;
+            width:16px;
+            height:16px;
+            background:{color_code_val};
+            border-radius:50%;
+            border:1px solid #ccc;
+            margin-left:8px;
+        "></span>
+        """
+
+    st.markdown(f"## Colore: {label} {color_dot}", unsafe_allow_html=True)
 
     for idx, r in sub.iterrows():
-
         basename = r["basename"]
 
-        col1, col2, col3 = st.columns([1,1,0.6])
+        col1, col2 = st.columns(2)
 
-        unique_key = f"{selected_title}_{color}_{basename}_{idx}"
+        unique_key = f"{selected_title}_{label}_{basename}_{idx}"
 
         with col1:
             up = st.file_uploader("Upload", key=unique_key)
 
             if up:
-                processed = process_image(up.getbuffer())
-                (out_dir / basename).write_bytes(processed)
+                (out_dir / basename).write_bytes(up.getbuffer())
                 st.rerun()
 
         with col2:
-            if basename in existing:
+            if (out_dir / basename).exists():
                 st.image(str(out_dir / basename))
-            else:
-                st.info("Non assegnata")
-
-        with col3:
-            if basename in existing:
-                if st.button("🗑️", key=f"del_{unique_key}"):
-                    delete_image(basename)
-                    st.rerun()
-
-st.success("Sistema pronto 🚀")
